@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>はじめてのアプリ</title>
+</head>
+<body>
+  <h1>Hello World!</h1>
+  <p>勉強管理アプリ</p>
+
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>勉強管理アプリ（マルチユーザー版 完全版）</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<style>
+body { font-family:sans-serif; text-align:center; background:#f5f7fb;}
+.container { display:none; background:#fff; padding:20px; margin:20px auto; width:480px; border-radius:10px;}
+#loginScreen { display:block; }
+button { margin:5px; padding:5px 12px; cursor:pointer;}
+#timer { font-size:28px; margin-top:20px;}
+#remaining { font-size:18px; margin-top:5px; color:#e74c3c;}
+input { padding:5px; text-align:center;}
+#newSubject { width:250px; }
+#goalHour, #goalMin { width:50px; }
+#resultList div { margin-bottom:5px; }
+</style>
+</head>
+<body>
+
+<div id="loginScreen" class="container">
+<h2>ログイン / ユーザー登録</h2>
+<input type="text" id="loginUser" placeholder="ユーザー名"><br>
+<input type="password" id="loginPass" placeholder="パスワード"><br>
+<button onclick="login()">ログイン</button>
+<button onclick="register()">新規登録</button>
+<p id="loginError" style="color:red;"></p>
+</div>
+
+<div id="homeScreen" class="container">
+<h2>ホーム</h2>
+<p id="totalTimeHome">合計勉強時間: 00:00:00</p>
+<button onclick="goStart()">勉強開始</button>
+<button onclick="showLastRecord()">前回の記録</button><br>
+<button onclick="showDayResult()">日間結果</button>
+<button onclick="showWeekResult()">週間結果</button>
+<button onclick="showMonthResult()">月間結果</button><br>
+<button onclick="logout()">ログアウト</button>
+</div>
+
+<div id="selectSubjectScreen" class="container">
+<h2>勉強内容選択</h2>
+<select id="subjectSelect"></select><br>
+<input type="text" id="newSubject" placeholder="新しい勉強内容">
+<button onclick="addSubject()">追加</button>
+<button onclick="deleteSubject()">削除</button><br>
+<button onclick="goGoal()">開始</button>
+<button onclick="backHome()">戻る</button>
+</div>
+
+<div id="goalScreen" class="container">
+<h2>目標設定</h2>
+<input type="number" id="goalHour" min="0"> 時間
+<input type="number" id="goalMin" min="0"> 分<br>
+<button onclick="goTimer()">スタート</button>
+</div>
+
+<div id="timerScreen" class="container">
+<h2>タイマー</h2>
+<h3 id="selectedSubject"></h3>
+<div id="timer">00:00:00</div>
+<div id="remaining">残り: 00:00</div>
+<button onclick="startTimer()">開始</button>
+<button onclick="stopTimer()">停止</button>
+<button onclick="endStudy()">終了</button>
+</div>
+
+<div id="graphScreen" class="container">
+<h2>勉強結果</h2>
+<h3 id="totalToday"></h3>
+<div id="resultList" style="text-align:center; margin:10px 0; font-size:16px;"></div>
+<canvas id="studyChart"></canvas>
+<button onclick="backHome()">ホームへ</button>
+</div>
+
+<script>
+let subjects=[], studyTimes={}, currentSubject='', startTime=0, interval=null, elapsed=0, goalTime=0, chart=null;
+let currentUser = ""; 
+let USERS = []; 
+
+// ======== ユーザー管理 ========
+function loadUsers(){ USERS = JSON.parse(localStorage.getItem('users')) || []; }
+function saveUsers(){ localStorage.setItem('users', JSON.stringify(USERS)); }
+
+function login(){
+    const user = document.getElementById('loginUser').value.trim();
+    const pass = document.getElementById('loginPass').value;
+    loadUsers();
+    const matchedUser = USERS.find(u => u.username === user && u.password === pass);
+    if(matchedUser){
+        currentUser = user;
+        loadUserData();
+        document.getElementById('loginScreen').style.display='none';
+        updateHome();
+        show("homeScreen");
+    } else {
+        document.getElementById('loginError').textContent="ユーザー名またはパスワードが違います";
+    }
+}
+
+function register(){
+    const user = document.getElementById('loginUser').value.trim();
+    const pass = document.getElementById('loginPass').value;
+    if(!user || !pass){ 
+        document.getElementById('loginError').textContent="ユーザー名とパスワードを入力してください"; 
+        return; 
+    }
+    loadUsers();
+    if(USERS.find(u=>u.username===user)){ 
+        document.getElementById('loginError').textContent="そのユーザー名は既に存在します"; 
+        return; 
+    }
+    USERS.push({username:user,password:pass});
+    saveUsers();
+    currentUser = user;
+    saveData({studyHistory:{}});  // 新規登録時に勉強データ初期化
+    loadUserData();
+    updateHome();
+    document.getElementById('loginScreen').style.display='none';
+    show("homeScreen");
+}
+
+function loadData(defaultData={studyHistory:{}}){ 
+    return JSON.parse(localStorage.getItem('studyData_' + currentUser)) || defaultData; 
+}
+function saveData(data){ 
+    localStorage.setItem('studyData_' + currentUser, JSON.stringify(data)); 
+}
+function loadUserData(){
+    const data = loadData();
+    subjects = Object.keys(data.studyHistory[Object.keys(data.studyHistory).slice(-1)] || {});
+    subjects.forEach(s=>studyTimes[s]=0);
+}
+
+// ======== 勉強管理 ========
+function addSubject(){
+    const name=document.getElementById('newSubject').value; if(!name) return;
+    if(!subjects.includes(name)) subjects.push(name);
+    if(!(name in studyTimes)) studyTimes[name]=0;
+    updateSelect(); 
+    document.getElementById('subjectSelect').value=name; 
+    document.getElementById('newSubject').value='';
+}
+function updateSelect(){
+    const select=document.getElementById('subjectSelect'); select.innerHTML='';
+    subjects.forEach(s=>{ const op=document.createElement('option'); op.value=s; op.text=s; select.appendChild(op); });
+}
+function deleteSubject(){
+    const select = document.getElementById('subjectSelect');
+    const name = select.value;
+    if(!name) return alert("削除する科目を選択してください");
+    if(!confirm(`${name} を本当に削除しますか？`)) return;
+    subjects = subjects.filter(s => s !== name);
+    delete studyTimes[name];
+    updateSelect();
+    alert(`${name} を削除しました`);
+}
+function show(id){ document.querySelectorAll('.container').forEach(c=>c.style.display='none'); document.getElementById(id).style.display='block'; }
+function goStart(){ show("selectSubjectScreen"); updateSelect(); }
+function backHome(){ updateHome(); show("homeScreen"); }
+function goGoal(){ currentSubject=document.getElementById('subjectSelect').value; if(!currentSubject) return alert("選んで"); show("goalScreen"); }
+function goTimer(){ 
+    const h=Math.max(0, Number(document.getElementById('goalHour').value||0)); 
+    const m=Math.max(0, Number(document.getElementById('goalMin').value||0)); 
+    goalTime=h*3600+m*60; 
+    document.getElementById('selectedSubject').textContent=currentSubject; 
+    elapsed=0; 
+    updateTimerDisplay(0);
+    show("timerScreen");
+}
+
+// タイマー
+function startTimer(){ if(interval) return; startTime=Date.now(); interval=setInterval(updateTimerInterval,1000); }
+function stopTimer(){ if(!interval) return; elapsed += Math.round((Date.now()-startTime)/1000); clearInterval(interval); interval=null; updateTimerDisplay(elapsed); }
+function updateTimerInterval(){ updateTimerDisplay(elapsed + Math.round((Date.now()-startTime)/1000)); }
+function updateTimerDisplay(sec){
+    const h=String(Math.floor(sec/3600)).padStart(2,'0'); 
+    const m=String(Math.floor((sec%3600)/60)).padStart(2,'0'); 
+    const s=String(sec%60).padStart(2,'0'); 
+    document.getElementById('timer').textContent=`${h}:${m}:${s}`;
+    const remaining = goalTime - sec;
+    const remainingH = String(Math.floor(remaining / 3600)).padStart(2,'0');
+    const remainingM = String(Math.floor((remaining % 3600) / 60)).padStart(2,'0');
+    document.getElementById('remaining').textContent = `残り: ${remainingH}:${remainingM}`;
+}
+// 勉強終了
+function endStudy(){
+    stopTimer(); 
+    const sec=elapsed; 
+    studyTimes[currentSubject]=(studyTimes[currentSubject]||0)+sec; 
+    const today=new Date().toISOString().slice(0,10);
+    let data=loadData();
+    if(!data.studyHistory[today]) data.studyHistory[today]={};
+    if(!data.studyHistory[today][currentSubject]) data.studyHistory[today][currentSubject]=0;
+    data.studyHistory[today][currentSubject]+=sec;
+    saveData(data);
+    elapsed=0; 
+    updateTimerDisplay(0);
+    show("graphScreen"); drawChart("day");
+}
+
+// ホーム画面の合計時間
+function updateHome(){
+    const data = loadData();
+    let totalSec = 0;
+    Object.values(data.studyHistory).forEach(day=>{
+        Object.values(day).forEach(sec=>{
+            totalSec += sec || 0; // 保護処置を追加（NaNを防ぐ）
+        });
+    });
+    const h=String(Math.floor(totalSec/3600)).padStart(2,'0');
+    const m=String(Math.floor((totalSec%3600)/60)).padStart(2,'0');
+    const s=String(totalSec%60).padStart(2,'0');
+    document.getElementById('totalTimeHome').textContent=`合計勉強時間: ${h}:${m}:${s}`;
+}
+
+// グラフ描画
+function drawChart(type="day"){
+    const ctx=document.getElementById('studyChart').getContext('2d');
+    if(chart) chart.destroy();
+    const data=loadData();
+    const list=document.getElementById('resultList'); list.innerHTML='';
+    if(type==="day" || type==="last"){
+        const today = (type==="day")? new Date().toISOString().slice(0,10) : Object.keys(data.studyHistory).sort().slice(-1)[0];
+        const record = data.studyHistory[today] || {};
+        let totalSec = 0;
+        const labels=[], goalArr=[], actualArr=[];
+        subjects.forEach(sub=>{
+            const actual = record[sub] || (studyTimes[sub]||0);
+            const goal = Math.round(goalTime/60);
+            const actualMin = Math.round(actual/60);
+            totalSec += actual;
+            labels.push(sub); goalArr.push(goal); actualArr.push(actualMin);
+        });
+        list.innerHTML=`合計勉強時間: ${Math.floor(totalSec/3600)}時間${Math.floor((totalSec%3600)/60)}分`;
+        document.getElementById('totalToday').textContent=(type==="day")?"日間結果":`前回勉強日: ${today}`;
+        chart = new Chart(ctx,{
+            type:'bar',
+            data:{labels:labels,datasets:[
+                {label:'目標(分)', data:goalArr, backgroundColor:'#bdc3c7'},
+                {label:'実績(分)', data:actualArr, backgroundColor:'#3498db'}
+            ]},
+            options:{responsive:true, scales:{y:{beginAtZero:true}}}
+        });
+    } else {
+        const today=new Date();
+        const days=(type==="week")?7:30;
+        const labels=[], totalArr=[], avgArr=[], subjectArr={};
+        for(let i=days-1;i>=0;i--){
+            const date=new Date(today.getTime()-i*86400000).toISOString().slice(0,10);
+            labels.push(date.slice(5));
+            let total=0; if(data.studyHistory[date]){
+                Object.keys(data.studyHistory[date]).forEach(s=>{
+                    if(subjects.includes(s)){
+                        const val = data.studyHistory[date][s]/3600;
+                        total+=val;
+                        if(!subjectArr[s]) subjectArr[s]=[]; subjectArr[s].push(val);
+                    }
+                });
+            }
+            totalArr.push(total); avgArr.push(total/days);
+        }
+        const avg = totalArr.reduce((a,b)=>a+b,0)/totalArr.length;
+        const div = document.createElement('div'); div.innerHTML=`1日平均: ${avg.toFixed(2)}時間`; list.appendChild(div);
+        const datasets=[{label:'合計勉強時間(h)', data:totalArr, borderColor:'#3498db', fill:false},{label:'1日平均(h)', data:Array(labels.length).fill(avg), borderColor:'#2ecc71', fill:false}];
+        Object.keys(subjectArr).forEach(s=>{ datasets.push({label:`${s}合計(h)`, data:subjectArr[s], borderColor:'#'+Math.floor(Math.random()*16777215).toString(16), fill:false}); });
+        chart=new Chart(ctx,{type:'line',data:{labels:labels,datasets:datasets},options:{responsive:true,scales:{y:{beginAtZero:true}}}});
+    }
+}
+function showDayResult(){ drawChart("day"); show("graphScreen"); }
+function showWeekResult(){ drawChart("week"); show("graphScreen"); }
+function showMonthResult(){ drawChart("month"); show("graphScreen"); }
+function showLastRecord(){ drawChart("last"); show("graphScreen"); }
+function logout(){ currentUser = ""; show("loginScreen"); }
+
+</script>
+</body>
+</html>
